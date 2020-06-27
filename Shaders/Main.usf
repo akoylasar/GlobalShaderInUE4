@@ -1,0 +1,187 @@
+// Copyright (c) Fouad Valadbeigi (akoylasar@gmail.com)
+
+#include "/Shaders/HelperFunctions.usf"
+
+// Global constants.
+#define WORLD_ORIGIN float3(0.0, 0.0, 0.0)
+#define CAMERA_DISTANCE 8.0
+#define WORLD_UP float3(0.0, 1.0, 0.0)
+#define TFAR 1e7
+#define FLOOR_DIM float2(10.0, 10.0) // width, height
+#define FLOOR_Y_OFFSET 0
+#define FLOOR_NORMAL float3(0.0, 1.0, 0.0)
+#define ZENITH_COLOR float3(0.0, 0.0, 1.0)
+#define HORIZON_COLOR float3(0.9, 0.9, 0.9)
+#define GAMMA_INV 0.454545
+#define LIGHT_RADIUS 0.1
+
+// User defined settings.
+float4 CrystalBall; // CrystalBall location (xyz), CrystalBall Radius (w).
+float IndexOfRefraction;
+
+Texture2D FloorTexture;
+SamplerState FloorTextureSampler;
+
+// Light settings.
+// TODO: More lights with texture at some point?
+float4 Light1; // Light position (xyz), Light intensity (w).
+float4 Light2; // Light position (xyz), Light intensity (w).
+float4 AmbientAndShadow; // Ambient color(xyz), Shadow factor(w).
+
+// Interaction settings.
+float4 CameraPosition;
+float AspectRatio;
+
+void MainVS(in float4 InPosition : ATTRIBUTE0,
+            out float2 UV : TEXCOORD0,
+            out float4 Output : SV_POSITION)
+{
+  UV = InPosition.xy; 
+  Output = InPosition;
+}
+
+// Calculate radiance exitance at hit point from a given light.
+float3 Shade(float3 HitPosition, float3 Normal, float3 Diffuse, float4 Light)
+{
+  float3 LightPosition = Light.xyz;
+  float LightIntensity = Light.w;
+
+  float3 LightVector = LightPosition - HitPosition;
+  float3 NormalizedLightVector = normalize(LightVector);
+  float LightVectorLength = length(LightVector);
+  
+  // Calculate shadows.
+  float TMin = TFAR;
+  float T0 = IntersectWithSphereLight(HitPosition, NormalizedLightVector, Light.xyz, LIGHT_RADIUS);
+  TMin = T0 > 0.0 ? T0 : TFAR;
+  float4 HitRecord = IntersectWithSphere(HitPosition, NormalizedLightVector, CrystalBall.xyz, CrystalBall.w);
+  float Shadow = HitRecord.w > 0.0 && HitRecord.w < TMin ? AmbientAndShadow.w : 1.0;
+
+  // Light intesity inversely proportaional to its distance squared but we don't have to be physically correct here and we can save up computation.
+  LightIntensity /= LightVectorLength;
+
+  // Add diffuse term.
+  float3 Radiance = Diffuse * LightIntensity * max(dot(Normal, NormalizedLightVector), 0.0) * Shadow;
+
+  // TODO: Specular.
+  return Radiance;
+}
+
+float3 ShadeAll(float3 HitPosition, float3 Normal, float3 Diffuse)
+{
+  float3 Radiance = Diffuse * AmbientAndShadow.xyz;
+  Radiance += Shade(HitPosition, Normal, Diffuse, Light1);
+  Radiance += Shade(HitPosition, Normal, Diffuse, Light2);
+  return Radiance;
+}
+
+float3 GetSkyColor(float3 RayDirection)
+{
+  return lerp(ZENITH_COLOR, HORIZON_COLOR, exp(-10.0 * max(RayDirection.y, 0.0)));
+}
+
+// Intersect the ray with the scene (excluding the sphere, i.e plane and the lights).
+float3 IntersectWithScene(float3 RayOrigin, float3 RayDirection, inout float TMin)
+{
+  float3 Radiance = float3(0.0, 0.0, 0.0);
+
+  float4 HitRecord0 = IntersectWithFloor(RayOrigin, RayDirection, FLOOR_Y_OFFSET, FLOOR_DIM);
+  if (HitRecord0.z > 0.0 && HitRecord0.z < TMin)
+  {
+    TMin = HitRecord0.w;
+    float3 HitPosition = RayOrigin + TMin * RayDirection;
+    // Get the color of the floor based on it's uv coordinates stored as xy component of the hit record.
+    float3 Diffuse = FloorTexture.Sample(FloorTextureSampler, HitRecord0.xy).rgb;
+    Radiance = ShadeAll(HitPosition, FLOOR_NORMAL, Diffuse);
+  }
+
+  // TODO: Lights could have different properties (intensity, color, etc).
+  
+  // Intersect with Light1.
+  float LightIntensity = Light1.w;
+  float T0 = IntersectWithSphereLight(RayOrigin, RayDirection, Light1.xyz, LIGHT_RADIUS);
+  if (T0 > 0.0 && T0 < TMin)
+  {
+    TMin = T0;
+    Radiance = float3(LightIntensity, LightIntensity, LightIntensity);
+  }
+
+  // Intersect with Light2.
+  float T1 = IntersectWithSphereLight(RayOrigin, RayDirection, Light2.xyz, LIGHT_RADIUS);
+  if (T1 > 0.0 && T1 < TMin)
+  {
+    TMin = T1;
+    Radiance = float3(LightIntensity, LightIntensity, LightIntensity);
+  }
+
+  return Radiance;
+}
+
+float4 MainPS(in float2 UV : TEXCOORD0) : SV_Target0
+{
+  float3 RayOrigin = CameraPosition;
+
+  // TODO: Calculate ViewMatrix in CPU.
+  float3x3 ViewMatrix = MakeLookAt(WORLD_ORIGIN, RayOrigin, WORLD_UP);
+  float3 RayDirection = mul(normalize(float3(UV * float2(AspectRatio, 1.0), 1.8)), ViewMatrix);
+
+  float TMin = TFAR;
+  float3 Radiance = IntersectWithScene(RayOrigin, RayDirection, TMin);
+
+  float4 HitRecord1 = IntersectWithSphere(RayOrigin, RayDirection, CrystalBall.xyz, CrystalBall.w);
+  // If we hit the crystal ball refraction happens.
+  if (HitRecord1.w > 0.0 && HitRecord1.w < TMin)
+  {
+    TMin = HitRecord1.w;
+    float3 HitPosition = RayOrigin + TMin * RayDirection;
+
+    float3 Normal = HitRecord1.xyz;
+    float3 NewPos = HitPosition;
+    
+
+    // The ray is refracted; We refer to it as RefracRayIn.
+    float3 RefractRayIn = refract(RayDirection, Normal, 1.0 / IndexOfRefraction);
+    // Now we intersect the ray with the floor and the ball. We could have just intersected the sphere but then if the ball cuts through
+    // the floor we get a visually incorrect result.
+    NewPos += 0.001 * RefractRayIn;
+    float RefRactT = TFAR;
+    float4 HitRecord2 = IntersectWithFloor(NewPos , RefractRayIn, FLOOR_Y_OFFSET, FLOOR_DIM);
+    RefRactT = HitRecord2.z > 0.0 ? HitRecord2.w : TFAR;
+    float4 HitRecord3 = IntersectWithSphere(NewPos, RefractRayIn, CrystalBall.xyz, CrystalBall.w);
+    float HasCutThroughFloor = HitRecord3.w > 0.0 && HitRecord3.w < RefRactT ? 0.0 : 1.0;
+
+    if(HasCutThroughFloor > 0.0)
+    {
+      float3 Diffuse = FloorTexture.Sample(FloorTextureSampler, HitRecord2.xy).rgb;
+      Radiance = ShadeAll(NewPos, FLOOR_NORMAL, Diffuse);
+    }
+    else
+    {
+      Normal = HitRecord3.xyz;
+      NewPos += HitRecord3.w * RefractRayIn;
+     
+      // Intersect the floor with the RefracRayIn ray. The RefracRayIn is now refracted again (going out of the ball); We refer to it as RefractRayOut.
+      float3 RefractRayOut = refract(RefractRayIn, Normal, IndexOfRefraction);
+      float4 HitRecord4 = IntersectWithFloor(NewPos, RefractRayOut, FLOOR_Y_OFFSET, FLOOR_DIM);
+
+      if (HitRecord4.z > 0.0)
+      {
+        Normal = FLOOR_NORMAL;
+        NewPos += HitRecord4.w * RefractRayOut;
+        float3 Diffuse = FloorTexture.Sample(FloorTextureSampler, HitRecord4.xy).rgb;
+        Radiance = ShadeAll(NewPos, Normal, Diffuse);
+      }
+      else
+      {
+        Radiance = GetSkyColor(RefractRayIn);
+      }
+    }
+  }
+
+  // If we hit nothing just return the background color.
+  if (TMin >= TFAR)
+    Radiance = GetSkyColor(RayDirection);
+
+  // Gamma correct and output.
+  return float4(pow(Radiance, GAMMA_INV), 1.0);
+}

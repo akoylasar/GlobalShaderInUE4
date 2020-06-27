@@ -1,0 +1,16 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{D3A3A91D-4DA1-1A2F-06E7-B79CD7CF7C72}",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "CrystalBall",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"AdditionalDependencies": [
+				"Engine"
+			]
+		}
+	]
+}

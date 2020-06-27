@@ -1,0 +1,60 @@
+// Copyright (c) Fouad Valadbeigi (akoylasar@gmail.com)
+
+// @return v of type float4 where:
+// v.xyz is the normal of the hit point.
+// v.w hit time.
+// in case of miss -1.0 is returned.
+float4 IntersectWithSphere(float3 RayOrigin, float3 RayDirection, float3 SphereLocation, float SphereRadius)
+{
+  float3 OC = RayOrigin - SphereLocation;
+  float B = dot(OC, RayDirection);
+  float C = dot(OC, OC) - SphereRadius * SphereRadius;
+  float D = B * B - C;
+  if (D < 0.0)
+    return float4(-1.0, -1.0, -1.0, -1.0);
+  float T = -B - sqrt(D);
+  float NormalDirection = 1.0;
+  if (T < 0.0)
+  {
+    T = -B + sqrt(D);
+    NormalDirection = -1.0;
+  }
+  float3 HitPoint = RayOrigin + T * RayDirection;
+  float3 Normal = normalize(HitPoint - SphereLocation);
+  return float4(NormalDirection * Normal, T);
+}
+
+// @return v of type float where:
+// v is hit time.
+// in case of miss -1.0 is returned.
+float IntersectWithSphereLight(float3 RayOrigin, float3 RayDirection, float3 Location, float Radius)
+{
+  float3 OC = RayOrigin - Location;
+  float B = dot(OC, RayDirection);
+  float C = dot(OC, OC) - Radius * Radius;
+  float D = B * B - C;
+  if (D < 0.0)
+    return float4(-1.0, -1.0, -1.0, -1.0);
+  return -B - sqrt(D);
+}
+
+// @return v of type float4 where:
+// v.xy is the uv coord of the hit point.
+// v.z is whether there was a hit (> 0.0) or not (< 0.0).
+// v.w hit time.
+float4 IntersectWithFloor(float3 RayOrigin, float3 RayDirection, float YOffset, float2 Dimensions)
+{
+  float T = (YOffset - RayOrigin.y) / RayDirection.y;
+  float3 HitPoint = RayOrigin + T * RayDirection;
+  float2 S = sign(Dimensions - abs(HitPoint.xz));
+  float2 UV = (HitPoint.xz - Dimensions) / Dimensions;
+  return float4(UV, min(T, min(S.x, S.y)), T);
+}
+
+float3x3 MakeLookAt(float3 Target, float3 Origin, float3 Up)
+{
+  float3 W = normalize(Target - Origin);
+  float3 U = normalize(cross(W, Up));
+  float3 V = cross(U, W);
+  return float3x3(U, V, W);
+}
